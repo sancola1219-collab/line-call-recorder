@@ -31,26 +31,47 @@ class LineCallDetectorService : AccessibilityService() {
             "voice",
             "Voice",
             "video",
-            "Video"
+            "Video",
+            "VoiceCall",
+            "VideoCall",
+            "CallActivity",
+            "VoipActivity"
         )
         
-        // LINE 通話相關的 UI 元素關鍵字
+        // LINE 通話相關的 UI 元素關鍵字（中文、英文、日文）
         private val CALL_UI_KEYWORDS = listOf(
+            // 中文
             "通話中",
             "撥號中",
             "來電",
             "響鈴",
+            "掛斷",
+            "接聽",
+            "拒絕",
+            "靜音",
+            "擴音",
+            "開始視訊",
+            "關閉麥克風",
+            "音效設定",
+            // 英文
             "calling",
             "ringing",
             "in call",
             "incoming",
             "outgoing",
-            "掛斷",
-            "接聽",
-            "拒絕",
-            "靜音",
-            "擴音"
+            "hang up",
+            "answer",
+            "decline",
+            "mute",
+            "speaker",
+            // 日文
+            "通話",
+            "発信",
+            "着信"
         )
+        
+        // 通話時間格式的正則表達式 (例如: 00:27, 1:23:45)
+        private val CALL_TIMER_PATTERN = Regex("^\\d{1,2}:\\d{2}(:\\d{2})?$")
         
         // 服務實例（用於外部檢查服務狀態）
         var instance: LineCallDetectorService? = null
@@ -60,7 +81,7 @@ class LineCallDetectorService : AccessibilityService() {
         var currentCallState: CallState = CallState.IDLE
             private set
         
-        // 狀態變化監聽器
+        // 狀態變化監聯器
         var onCallStateChanged: ((CallState) -> Unit)? = null
     }
     
@@ -68,27 +89,35 @@ class LineCallDetectorService : AccessibilityService() {
     private var callStartTime: Long = 0
     private var isInLineApp = false
     private var lastWindowClassName: String? = null
+    private var callCheckHandler: android.os.Handler? = null
+    private var lastCallUIDetectedTime: Long = 0
     
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "Accessibility Service connected")
         
         instance = this
+        callCheckHandler = android.os.Handler(mainLooper)
         
-        // 配置服務
+        // 配置服務 - 監聽所有應用以便偵測 LINE
         serviceInfo = serviceInfo?.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
+                    AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
-                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            notificationTimeout = 100
-            packageNames = arrayOf(LINE_PACKAGE)
+                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            notificationTimeout = 50
+            // 不限制 packageNames，監聽所有應用
+            packageNames = null
         }
         
         // 啟動錄音服務
         startRecordingService()
+        
+        Log.i(TAG, "Service configured and ready")
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -96,29 +125,43 @@ class LineCallDetectorService : AccessibilityService() {
         
         val packageName = event.packageName?.toString() ?: return
         
-        // 只處理 LINE 應用的事件
-        if (packageName != LINE_PACKAGE) {
-            if (isInLineApp) {
-                isInLineApp = false
-                // 離開 LINE 應用，檢查是否需要結束通話偵測
-                checkCallEnded()
-            }
-            return
+        // 記錄所有 LINE 相關事件
+        if (packageName == LINE_PACKAGE) {
+            Log.d(TAG, "LINE Event: type=${event.eventType}, class=${event.className}, text=${event.text}")
         }
         
-        isInLineApp = true
-        
+        // 處理 LINE 應用的事件
+        if (packageName == LINE_PACKAGE) {
+            isInLineApp = true
+            handleLineEvent(event)
+        } else {
+            if (isInLineApp) {
+                isInLineApp = false
+                // 離開 LINE 應用，延遲檢查是否需要結束通話
+                scheduleCallEndCheck()
+            }
+        }
+    }
+    
+    /**
+     * 處理 LINE 應用事件
+     */
+    private fun handleLineEvent(event: AccessibilityEvent) {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 handleWindowStateChanged(event)
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 handleWindowContentChanged(event)
             }
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
                 handleNotificationChanged(event)
             }
         }
+        
+        // 定期掃描當前視窗
+        scanCurrentWindow()
     }
     
     /**
@@ -137,10 +180,15 @@ class LineCallDetectorService : AccessibilityService() {
         
         if (isCallActivity) {
             Log.i(TAG, "Detected LINE call activity: $className")
-            detectCallState(event)
-        } else {
-            // 檢查視窗內容是否包含通話相關元素
-            checkWindowForCallUI(event)
+            updateCallState(CallState.ACTIVE)
+            return
+        }
+        
+        // 檢查事件文字
+        val eventText = event.text?.joinToString(" ") ?: ""
+        if (containsCallKeywords(eventText)) {
+            Log.i(TAG, "Detected call keywords in event: $eventText")
+            updateCallState(CallState.ACTIVE)
         }
     }
     
@@ -148,9 +196,21 @@ class LineCallDetectorService : AccessibilityService() {
      * 處理視窗內容變化
      */
     private fun handleWindowContentChanged(event: AccessibilityEvent) {
-        // 只在可能的通話狀態下檢查內容變化
-        if (currentCallState != CallState.IDLE || isLikelyCallWindow()) {
-            checkWindowForCallUI(event)
+        val eventText = event.text?.joinToString(" ") ?: ""
+        
+        // 檢查是否有通話計時器格式的文字
+        if (CALL_TIMER_PATTERN.containsMatchIn(eventText)) {
+            Log.i(TAG, "Detected call timer: $eventText")
+            lastCallUIDetectedTime = System.currentTimeMillis()
+            updateCallState(CallState.ACTIVE)
+            return
+        }
+        
+        // 檢查是否包含通話關鍵字
+        if (containsCallKeywords(eventText)) {
+            Log.i(TAG, "Detected call keywords: $eventText")
+            lastCallUIDetectedTime = System.currentTimeMillis()
+            updateCallState(CallState.ACTIVE)
         }
     }
     
@@ -162,19 +222,14 @@ class LineCallDetectorService : AccessibilityService() {
         
         Log.d(TAG, "Notification: $text")
         
-        // 檢查通知是否包含通話相關關鍵字
-        val isCallNotification = CALL_UI_KEYWORDS.any { keyword ->
-            text.contains(keyword, ignoreCase = true)
-        }
-        
-        if (isCallNotification) {
+        if (containsCallKeywords(text)) {
             Log.i(TAG, "Detected LINE call notification: $text")
             
             when {
-                text.contains("來電") || text.contains("incoming") -> {
+                text.contains("來電") || text.contains("incoming") || text.contains("着信") -> {
                     updateCallState(CallState.RINGING)
                 }
-                text.contains("通話中") || text.contains("in call") -> {
+                text.contains("通話中") || text.contains("in call") || text.contains("通話") -> {
                     updateCallState(CallState.ACTIVE)
                 }
             }
@@ -182,99 +237,94 @@ class LineCallDetectorService : AccessibilityService() {
     }
     
     /**
-     * 檢查視窗是否包含通話 UI 元素
+     * 掃描當前視窗尋找通話 UI
      */
-    private fun checkWindowForCallUI(event: AccessibilityEvent) {
+    private fun scanCurrentWindow() {
         try {
             val rootNode = rootInActiveWindow ?: return
             
-            // 遞迴搜尋通話相關的 UI 元素
-            val hasCallUI = searchForCallUI(rootNode)
+            val hasCallUI = searchForCallUI(rootNode, 0)
             
-            if (hasCallUI && currentCallState == CallState.IDLE) {
-                Log.i(TAG, "Detected call UI elements")
-                updateCallState(CallState.ACTIVE)
-            } else if (!hasCallUI && currentCallState == CallState.ACTIVE) {
-                // 可能通話結束，但需要延遲確認
-                checkCallEnded()
+            if (hasCallUI) {
+                lastCallUIDetectedTime = System.currentTimeMillis()
+                if (currentCallState == CallState.IDLE) {
+                    Log.i(TAG, "Detected call UI through window scan")
+                    updateCallState(CallState.ACTIVE)
+                }
             }
             
             rootNode.recycle()
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking window for call UI", e)
+            Log.e(TAG, "Error scanning window", e)
         }
     }
     
     /**
      * 遞迴搜尋通話 UI 元素
      */
-    private fun searchForCallUI(node: AccessibilityNodeInfo): Boolean {
-        // 檢查節點文字
-        val nodeText = node.text?.toString() ?: ""
-        val nodeDesc = node.contentDescription?.toString() ?: ""
-        val nodeId = node.viewIdResourceName ?: ""
+    private fun searchForCallUI(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 15) return false // 限制搜尋深度
         
-        val combinedText = "$nodeText $nodeDesc $nodeId"
-        
-        // 檢查是否包含通話關鍵字
-        val hasCallKeyword = CALL_UI_KEYWORDS.any { keyword ->
-            combinedText.contains(keyword, ignoreCase = true)
-        }
-        
-        if (hasCallKeyword) {
-            Log.d(TAG, "Found call UI element: $combinedText")
-            return true
-        }
-        
-        // 遞迴檢查子節點
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            if (searchForCallUI(child)) {
-                child.recycle()
+        try {
+            // 檢查節點文字
+            val nodeText = node.text?.toString() ?: ""
+            val nodeDesc = node.contentDescription?.toString() ?: ""
+            val nodeId = node.viewIdResourceName ?: ""
+            
+            // 檢查是否有通話計時器
+            if (CALL_TIMER_PATTERN.matches(nodeText)) {
+                Log.d(TAG, "Found call timer in node: $nodeText")
                 return true
             }
-            child.recycle()
+            
+            // 檢查是否包含通話關鍵字
+            val combinedText = "$nodeText $nodeDesc"
+            if (containsCallKeywords(combinedText)) {
+                Log.d(TAG, "Found call UI element: $combinedText")
+                return true
+            }
+            
+            // 檢查 resource ID 是否包含通話相關
+            if (nodeId.contains("call", ignoreCase = true) || 
+                nodeId.contains("voip", ignoreCase = true) ||
+                nodeId.contains("hangup", ignoreCase = true) ||
+                nodeId.contains("mute", ignoreCase = true)) {
+                Log.d(TAG, "Found call-related resource ID: $nodeId")
+                return true
+            }
+            
+            // 遞迴檢查子節點
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                val found = searchForCallUI(child, depth + 1)
+                child.recycle()
+                if (found) return true
+            }
+        } catch (e: Exception) {
+            // 忽略節點存取錯誤
         }
         
         return false
     }
     
     /**
-     * 偵測通話狀態
+     * 檢查文字是否包含通話關鍵字
      */
-    private fun detectCallState(event: AccessibilityEvent) {
-        val text = event.text?.joinToString(" ") ?: ""
-        val className = event.className?.toString() ?: ""
-        
-        when {
-            text.contains("來電") || text.contains("incoming") || 
-            text.contains("響鈴") || text.contains("ringing") -> {
-                updateCallState(CallState.RINGING)
-            }
-            text.contains("通話中") || text.contains("calling") ||
-            className.contains("InCall", ignoreCase = true) -> {
-                updateCallState(CallState.ACTIVE)
-            }
-            text.contains("結束") || text.contains("ended") -> {
-                updateCallState(CallState.ENDED)
-            }
-            else -> {
-                // 預設為通話中
-                if (currentCallState == CallState.IDLE) {
-                    updateCallState(CallState.ACTIVE)
-                }
-            }
+    private fun containsCallKeywords(text: String): Boolean {
+        if (text.isBlank()) return false
+        return CALL_UI_KEYWORDS.any { keyword ->
+            text.contains(keyword, ignoreCase = true)
         }
     }
     
     /**
-     * 檢查是否可能是通話視窗
+     * 排程通話結束檢查
      */
-    private fun isLikelyCallWindow(): Boolean {
-        val className = lastWindowClassName ?: return false
-        return CALL_ACTIVITY_KEYWORDS.any { keyword ->
-            className.contains(keyword, ignoreCase = true)
-        }
+    private fun scheduleCallEndCheck() {
+        callCheckHandler?.removeCallbacksAndMessages(null)
+        callCheckHandler?.postDelayed({
+            checkCallEnded()
+        }, 2000)
     }
     
     /**
@@ -282,12 +332,13 @@ class LineCallDetectorService : AccessibilityService() {
      */
     private fun checkCallEnded() {
         if (currentCallState == CallState.ACTIVE || currentCallState == CallState.RINGING) {
-            // 延遲一小段時間確認通話確實結束
-            android.os.Handler(mainLooper).postDelayed({
-                if (!isLikelyCallWindow() && !isInLineApp) {
-                    updateCallState(CallState.ENDED)
-                }
-            }, 1000)
+            val timeSinceLastUI = System.currentTimeMillis() - lastCallUIDetectedTime
+            
+            // 如果超過 3 秒沒有偵測到通話 UI，認為通話結束
+            if (timeSinceLastUI > 3000 && !isInLineApp) {
+                Log.i(TAG, "Call appears to have ended (no UI detected for ${timeSinceLastUI}ms)")
+                updateCallState(CallState.ENDED)
+            }
         }
     }
     
@@ -304,23 +355,25 @@ class LineCallDetectorService : AccessibilityService() {
         
         when (newState) {
             CallState.RINGING -> {
-                // 來電響鈴，準備錄音
                 Log.i(TAG, "LINE call ringing")
             }
             CallState.ACTIVE -> {
-                // 通話開始，啟動錄音
                 callStartTime = System.currentTimeMillis()
-                Log.i(TAG, "LINE call started")
+                Log.i(TAG, "LINE call started - triggering recording")
                 notifyRecordingService(true)
             }
             CallState.ENDED -> {
-                // 通話結束，停止錄音
                 val duration = System.currentTimeMillis() - callStartTime
                 Log.i(TAG, "LINE call ended, duration: ${duration}ms")
                 notifyRecordingService(false)
                 
                 // 重置狀態
-                currentCallState = CallState.IDLE
+                android.os.Handler(mainLooper).postDelayed({
+                    if (currentCallState == CallState.ENDED) {
+                        currentCallState = CallState.IDLE
+                        onCallStateChanged?.invoke(CallState.IDLE)
+                    }
+                }, 1000)
             }
             CallState.IDLE -> {
                 // 待機狀態
@@ -334,24 +387,34 @@ class LineCallDetectorService : AccessibilityService() {
      * 通知錄音服務
      */
     private fun notifyRecordingService(startRecording: Boolean) {
-        val intent = Intent(this, RecordingService::class.java).apply {
-            action = if (startRecording) {
-                RecordingService.ACTION_START_RECORDING
-            } else {
-                RecordingService.ACTION_STOP_RECORDING
+        try {
+            val intent = Intent(this, RecordingService::class.java).apply {
+                action = if (startRecording) {
+                    RecordingService.ACTION_START_RECORDING
+                } else {
+                    RecordingService.ACTION_STOP_RECORDING
+                }
             }
+            startService(intent)
+            Log.i(TAG, "Sent ${if (startRecording) "START" else "STOP"} recording intent")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error notifying recording service", e)
         }
-        startService(intent)
     }
     
     /**
      * 啟動錄音服務
      */
     private fun startRecordingService() {
-        val intent = Intent(this, RecordingService::class.java).apply {
-            action = RecordingService.ACTION_START_SERVICE
+        try {
+            val intent = Intent(this, RecordingService::class.java).apply {
+                action = RecordingService.ACTION_START_SERVICE
+            }
+            startForegroundService(intent)
+            Log.i(TAG, "Started recording service")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting recording service", e)
         }
-        startForegroundService(intent)
     }
     
     override fun onInterrupt() {
@@ -361,6 +424,7 @@ class LineCallDetectorService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "Accessibility Service destroyed")
+        callCheckHandler?.removeCallbacksAndMessages(null)
         instance = null
         currentCallState = CallState.IDLE
     }

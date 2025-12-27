@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- LINE 品牌色 -->
+    <color name="line_green">#00B900</color>
+    <color name="line_green_dark">#009900</color>
+    <color name="line_green_light">#4CD964</color>
+    
+    <!-- 主題色 -->
+    <color name="primary">#00B900</color>
+    <color name="primary_dark">#009900</color>
+    <color name="primary_light">#4CD964</color>
+    <color name="accent">#FF5722</color>
+    
+    <!-- 狀態色 -->
+    <color name="status_recording">#F44336</color>
+    <color name="status_idle">#9E9E9E</color>
+    <color name="status_enabled">#4CAF50</color>
+    <color name="status_disabled">#F44336</color>
+    
+    <!-- 背景色 -->
+    <color name="background">#FFFFFF</color>
+    <color name="background_secondary">#F5F5F5</color>
+    <color name="surface">#FFFFFF</color>
+    
+    <!-- 文字色 -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_hint">#BDBDBD</color>
+    <color name="text_on_primary">#FFFFFF</color>
+    
+    <!-- 分隔線 -->
+    <color name="divider">#E0E0E0</color>
+</resources>

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LINE 通話錄音</string>
+    
+    <!-- 無障礙服務 -->
+    <string name="accessibility_service_description">此服務用於偵測 LINE 通話狀態，當偵測到通話時自動開始錄音。\n\n此服務僅監控 LINE 應用程式，不會收集或傳送任何個人資料。</string>
+    
+    <!-- 主頁面 -->
+    <string name="service_status">服務狀態</string>
+    <string name="service_enabled">已啟用</string>
+    <string name="service_disabled">未啟用</string>
+    <string name="enable_service">啟用服務</string>
+    <string name="recording_status">錄音狀態</string>
+    <string name="recording_active">正在錄音</string>
+    <string name="recording_idle">待機中</string>
+    <string name="view_recordings">查看錄音</string>
+    <string name="settings">設定</string>
+    
+    <!-- 錄音列表 -->
+    <string name="recordings_title">錄音列表</string>
+    <string name="no_recordings">尚無錄音檔案</string>
+    <string name="delete">刪除</string>
+    <string name="share">分享</string>
+    <string name="play">播放</string>
+    <string name="stop">停止</string>
+    <string name="delete_confirm">確定要刪除此錄音嗎？</string>
+    <string name="delete_success">已刪除</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">確定</string>
+    
+    <!-- 設定 -->
+    <string name="settings_title">設定</string>
+    <string name="audio_settings">音訊設定</string>
+    <string name="audio_source">音訊來源</string>
+    <string name="audio_source_summary">選擇錄音使用的音訊來源</string>
+    <string name="audio_format">音訊格式</string>
+    <string name="audio_format_summary">選擇錄音檔案格式</string>
+    <string name="sample_rate">取樣率</string>
+    <string name="sample_rate_summary">較高的取樣率可獲得更好的音質</string>
+    <string name="general_settings">一般設定</string>
+    <string name="auto_start">開機自動啟動</string>
+    <string name="auto_start_summary">開機後自動啟動服務</string>
+    <string name="notification_settings">通知設定</string>
+    <string name="show_recording_notification">顯示錄音通知</string>
+    <string name="show_recording_notification_summary">錄音時在通知欄顯示狀態</string>
+    
+    <!-- 通知 -->
+    <string name="notification_channel_name">錄音服務</string>
+    <string name="notification_channel_description">顯示錄音服務狀態</string>
+    <string name="notification_recording_title">正在錄製 LINE 通話</string>
+    <string name="notification_recording_text">點擊查看詳情</string>
+    <string name="notification_service_title">LINE 通話錄音服務</string>
+    <string name="notification_service_text">服務運行中，等待 LINE 通話</string>
+    
+    <!-- 權限 -->
+    <string name="permission_required">需要權限</string>
+    <string name="permission_audio_rationale">需要錄音權限才能錄製通話</string>
+    <string name="permission_notification_rationale">需要通知權限才能顯示錄音狀態</string>
+    <string name="grant_permission">授予權限</string>
+    
+    <!-- 錯誤訊息 -->
+    <string name="error_recording_failed">錄音失敗</string>
+    <string name="error_storage_full">儲存空間不足</string>
+    <string name="error_permission_denied">權限被拒絕</string>
+    
+    <!-- 時間格式 -->
+    <string name="duration_format">%1$02d:%2$02d:%3$02d</string>
+    <string name="date_format">yyyy/MM/dd HH:mm</string>
+</resources>
